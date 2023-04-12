@@ -66,6 +66,9 @@ POSTGIS_RPM=postgis-$(POSTGIS_VER)-$(POSTGIS_REL).$(ARCH).rpm
 POSTGIS_GPPKG=postgis-$(POSTGIS_PKG_VER)-$(OS)-$(ARCH).gppkg
 TARGET_GPPKG=$(POSTGIS_GPPKG)
 EXTRA_CLEAN+=$(GEOS_RPM) $(PROJ_RPM) $(JSON_RPM) $(GDAL_RPM) $(LIBEXPAT_RPM) $(POSTGIS_RPM) $(POSTGIS_GPPKG)
+ifeq ($(GPPKG),)
+GPPKG=gppkg
+endif
 
 #
 # Generic rules to build gppkgs included here
@@ -116,8 +119,44 @@ gppkg_only: $(GEOS_DIR) $(PROJ_DIR) $(JSON_DIR) $(GDAL_DIR) $(LIBEXPAT_DIR)
 	$(MAKE) $(POSTGIS_RPM) RPM_FLAGS=$(POSTGIS_RPM_FLAGS)
 	$(MAKE) $(POSTGIS_GPPKG) MAIN_RPM=$(POSTGIS_RPM) DEPENDENT_RPMS=$(DEPENDENT_RPMS)
 
-# gppkg_only:
-# 	$(MAKE) $(POSTGIS_RPM) RPM_FLAGS=$(POSTGIS_RPM_FLAGS)
-# 	$(MAKE) $(POSTGIS_GPPKG) MAIN_RPM=$(POSTGIS_RPM) DEPENDENT_RPMS=
+gppkg_spec_v2.yml: gppkg_spec_v2.yml.in
+	cat $< | sed "s/#arch/$(ARCH)/g" | sed "s/#os/$(OS)/g" | sed 's/#gpver/$(GP_VERSION_NUM)/g' > $@
 
-.PHONY: gppkg
+gppkgv2-geos:
+	install -D $(GEOS_DIR)/lib64/libgeos*so* gppkg_build/files/lib/
+
+gppkgv2-proj:
+	install -D $(PROJ_DIR)/lib/libproj*so* gppkg_build/files/lib
+	install -D $(PROJ_DIR)/share/proj gppkg_build/files/share
+
+gppkgv2-jsonc:
+	install -D $(JSON_DIR)/lib/libjson-c*so* gppkg_build/files/lib
+
+gppkgv2-gdal:
+	install -D $(GDAL_DIR)/lib/libgdal*so* gppkg_build/files/lib/
+	install -D $(GDAL_DIR)/share/gdal gppkg_build/files/share
+	# environment.d available since GPDB7
+	# https://github.com/greenplum-db/gpdb/pull/14327
+	install -D ./30-postgis.conf gppkg_build/files/etc/environment.d
+
+gppkgv2-libexpat:
+	install -D $(LIBEXPAT_DIR)/lib/libexpat*so* gppkg_build/files/lib/
+
+gppkgv2-postgis:
+	make -C $(POSTGIS_DIR) BLD_TOP=$(BLD_TOP) install DESTDIR=$(PWD)/gppkg_build/files
+
+gppkgv2: gppkg_spec_v2.yaml $(GEOS_DIR) $(PROJ_DIR) $(JSON_DIR) $(GDAL_DIR) $(LIBEXPAT_DIR)
+	rm -rf gppkg_build 2>/dev/null
+	mkdir -p gppkg_build/files
+	$(MAKE) gppkgv2-geos
+	$(MAKE) gppkgv2-proj
+	$(MAKE) gppkgv2-jsonc
+	$(MAKE) gppkgv2-gdal
+	$(MAKE) gppkgv2-libexpat
+	$(MAKE) gppkgv2-postgis
+	$(GPPKG) build \
+		--input $(PWD)/gppkg_build/files \
+		--config gppkg_spec_v2.yml \
+		--output $(POSTGIS_GPPKG)
+
+.PHONY: gppkg gppkgv2
